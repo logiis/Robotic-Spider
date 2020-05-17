@@ -1,0 +1,443 @@
+#include<Wire.h>
+#include<Adafruit_PWMServoDriver.h>
+
+#include  <Servo.h>
+Servo LegRot[4];
+Servo Foot[4];
+
+unsigned int timeBase = 2000;
+int timeStamp = 5;
+
+const int LegRot_Const[4][5] { {1635,1735,1785,1835,1935} , {1535,1435,1385,1335,1235} , {1615,1715,1765,1815,1915} , {1565,1465,1415,1365,1265} }; //1250 2320 , 1920 850 , 1230 2300 , 1950 880 
+const int Foot_Const[4][5] = { {2400,1800,1300,1100,600} , {900,1500,2000,2200,2700} , {2480,1880,1380,1180,680} , {760,1360,1860,2060,2560} };  //5 foot values - back, min, ground, mid, max(turns on Foot_Max)
+
+int LegRot_Values[4];
+int Foot_Values[4];
+//bool Foot_Max[4] = {false,false,false,false};
+
+const int Sensor[4] = { A0,A1,A2,A3 };
+int Sensor_Values[4];
+bool AllOnGround = true;
+
+
+int BaseStand[8] = { 2,2,2,2,3,3,3,3 };
+int RotateStand[8] = { 4,1,1,4,3,3,3,3 };//{ 1800,1330,1580,1150,3,3,3,3 };
+int ForwardStand[8] = { 1785,1305,1685,1265,3,3,3,3 };
+int SideWaysStand[8] = { 1785,1535,1685,1495,3,3,3,3 };
+
+int Bluetooth_stand[8] = { 2,2,2,2,1,1,1,1 };
+int Bluetooth_dir[4] = { 1,1,1,1 };
+bool BlueMove_Rotate = true;
+bool BluAuto = false;
+int AutoMove = 0;
+int AutoReturn = 1;
+
+int Dir[4] = { 1,1,1,1 };
+int RotateCCW_dir[4] = { 1,1,1,1 };
+int RotateCW_dir[4] = { -1,-1,-1,-1 };
+int MoveForward_dir[4] = { -1,-1,1,1 };
+int MoveBackward_dir[4] = { 1,1,-1,-1 };
+int MoveLeft_dir[4] = { 1,-1,-1,1 };
+int MoveRight_dir[4] = { -1,1,1,-1 };
+
+int RotateMax[4] = { 1935,1535,1915,1565 };
+int MoveMax[4] = { 1935,1535,1915,1565 }; //{ 1780,1330,1680,1350 }; //
+int animTimeCounter = 0;
+
+bool firstTime = true;
+bool animate = false;
+
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+void TimeTick()
+{
+  SerialLinkAnimation();
+  
+  if(BluAuto)
+  {
+    int RND = random(0,1000);
+    if(RND == 1)
+    {
+      AutoMove = random(0,7);
+      animate = true;
+      firstTime = true;
+    }
+
+    if(AutoMove==0)//stop
+    {
+      animate = false;
+    }
+    else if(AutoMove<=2)//forward
+    {
+      Move(MoveForward_dir, ForwardStand);
+    }
+    else if(AutoMove<=4)//CW
+    {
+      Rotate(RotateCW_dir, RotateStand);
+    }
+    else if(AutoMove<=6)//CCW
+    {
+      Rotate(RotateCCW_dir, RotateStand);
+    }
+    else if(AutoMove==7)//backward
+    {
+      Move(MoveBackward_dir, ForwardStand);
+    }
+  }
+  else
+  {
+    if(BlueMove_Rotate)
+      Rotate(Bluetooth_dir, Bluetooth_stand);
+    else
+      Move(Bluetooth_dir, Bluetooth_stand);
+  }
+}
+
+void EveryLoop()
+{
+  GroundDetect();
+  RunServos();
+}
+
+//rotating function- sets stand and then animate
+void Rotate(int directions[4], int stand[8])
+{
+  {
+    if (firstTime)
+    {
+      for (int i = 0; i < 4; i++)
+      {
+        Dir[i] = directions[i];
+        LegRot_Values[i] = LegRot_Const[i][stand[i]];
+        LegRot[i].writeMicroseconds(LegRot_Values[i]);
+        Foot_Values[i] = Foot_Const[i][stand[i + 4]];
+        Foot[i].writeMicroseconds(Foot_Values[i]);
+      }
+      firstTime = false;
+      delay(1000);
+    }
+    else if(animate)
+    {
+      for (int i = 0; i < 4; i++)
+      {
+        if (directions[i] == 1)
+        {
+          if (LegRot_Values[i] >= RotateMax[i])
+          {
+            Dir[i] = -4;
+            Foot_Values[i] = Foot_Const[i][2];
+          }
+          else if (LegRot_Values[i] <= RotateMax[i] - 320)
+          {
+            Dir[i] = 1;
+            Foot_Values[i] = Foot_Const[i][3];
+          }
+        }
+        else
+        {
+          if (LegRot_Values[i] <= RotateMax[i] - 300)
+          {
+            Dir[i] = 4;
+            Foot_Values[i] = Foot_Const[i][2];
+          }
+          else if (LegRot_Values[i] >= RotateMax[i] + 20)
+          {
+            Dir[i] = -1;
+            Foot_Values[i] = Foot_Const[i][3];
+          }
+        }
+        LegRot_Values[i] += Dir[i];
+      }
+    }
+  }
+}
+//movement function- sets stand and then animate
+void Move(int directions[4], int stand[8])
+{
+  {
+    if (firstTime)
+    {
+      for (int i = 0; i < 4; i++)
+      {
+        Dir[i] = directions[i];
+        LegRot_Values[i] = stand[i];
+        LegRot[i].writeMicroseconds(LegRot_Values[i]);
+        Foot_Values[i] = Foot_Const[i][stand[i + 4]];
+        Foot[i].writeMicroseconds(Foot_Values[i]);
+      }
+      firstTime = false;
+      delay(1000);
+    }
+    else if(animate)
+    {
+      for (int i = 0; i < 4; i++)
+      {
+        if (directions[i] == 1)
+        {
+          if (LegRot_Values[i] >= MoveMax[i])
+          {
+            if(AllOnGround)
+            {
+              if(BluAuto && AutoReturn==-1)
+              {
+                AutoMove = 7;
+                AutoReturn = 1;
+                firstTime = true;
+              }
+              else
+              {
+                Dir[i] = -4;
+                Foot_Values[i] = Foot_Const[i][2];
+              }
+            }
+            else if(BluAuto)
+            {
+              AutoReturn = -1;
+            }
+            else
+            {
+              animate = false;
+            }
+          }
+          else if (LegRot_Values[i] <= MoveMax[i] - 301)
+          {
+            Dir[i] = 1;
+            Foot_Values[i] = Foot_Const[i][3];
+          }
+        }
+        else
+        {
+          if (LegRot_Values[i] <= MoveMax[i] - 300)
+          {
+            if(AllOnGround)
+            {
+              if(BluAuto && AutoReturn==-1)
+              {
+                AutoMove = 7;
+                AutoReturn = 1;
+                firstTime = true;
+              }
+              else
+              {
+                Dir[i] = 4;
+                Foot_Values[i] = Foot_Const[i][2];
+              }
+            }
+            else if(BluAuto)
+            {
+              AutoReturn = -1;
+            }
+            else
+            {
+              animate = false;
+            }
+          }
+          else if (LegRot_Values[i] >= MoveMax[i] + 1)
+          {
+            Dir[i] = -1 ;
+            Foot_Values[i] = Foot_Const[i][3];
+          }
+        }
+        LegRot_Values[i] += Dir[i] * AutoReturn;
+      }
+    }
+  }
+}
+
+void setup()
+{
+  pwm.begin();
+  pwm.setPWMFreq(50);
+  for (int i = 0; i < 4; i++)
+  {
+    LegRot_Values[i] = LegRot_Const[i][BaseStand[i]];
+    Foot_Values[i] = Foot_Const[i][BaseStand[i+4]];
+    
+    pwm.setPWM(i+8,0,(int)((float)LegRot_Values[i] / 1000000 * 50 * 4096));
+    pwm.setPWM(i+12,0,(int)((float)Foot_Values[i] / 1000000 * 50 * 4096));
+    
+    pinMode(Sensor[i], OUTPUT);
+    Sensor_Values[i] = 0;
+    delay(500);
+  }
+  Serial.begin(9600);
+
+  delay(100);
+}
+
+void loop()
+{
+  ///////////////////////////////////// "timeStamp" millisecons time tick
+  if (millis() >= timeBase + timeStamp)
+  {
+    timeBase += timeStamp;
+
+    TimeTick();
+  }
+
+  EveryLoop();
+}
+
+//sets values to servos
+void RunServos()
+{
+  for (int i = 0; i < 4; i++)
+  {
+    pwm.setPWM(i+8,0,(int)((float)LegRot_Values[i] / 1000000 * 50 * 4096));
+    pwm.setPWM(i+12,0,(int)((float)Foot_Values[i] / 1000000 * 50 * 4096));
+  }
+}
+
+//detect if all legs are on ground
+void GroundDetect()
+{
+  AllOnGround = true;
+  int on = 0;
+  for (int i = 0; i < 4; i++)
+  {
+    Sensor_Values[i] = digitalRead(Sensor[i]);
+    if(Sensor_Values[i] == true)
+    {
+      on++;
+    }
+    if(on>2)
+    {
+      AllOnGround = false;
+    }
+  }
+}
+
+void SerialLinkAnimation()
+{
+  if (Serial.available() > 0) 
+  {
+    String com = Serial.readString();
+
+    if(com.charAt(0) == 'R')
+    {
+      BlueMove_Rotate = true;
+      for (int i = 1; i < 9; i++)
+      {
+        Bluetooth_stand[i] = com.charAt(i) - '0';
+      }
+      for (int i = 0; i < 4; i++)
+      {
+        if(com.charAt(9+i) == '+')
+        {
+          Bluetooth_dir[i] = 1;
+        }
+        else 
+        {
+          Bluetooth_dir[i] = -1;
+        }
+      }
+      firstTime = true;
+    }
+    else if(com.charAt(0) == 'M')
+    {
+      BlueMove_Rotate = false;
+      
+      int i = 1;
+      int Intsize = 0;
+      String r = " ";
+      //com.substring(0, 3);
+  
+      for (int j = 0; j < 4; j++)
+      {
+        Intsize = 0;
+        while(com.charAt(i) != '*')
+        {
+          i++;
+          Intsize++;
+        }
+        r = com.substring(i-Intsize, i);
+        Bluetooth_stand[j] = r.toInt();
+        i++;
+      }
+      for (int j = 0; j < 4; j++)
+      {
+        Bluetooth_stand[j+4] = com.charAt(i) - '0';
+        i++;
+      }
+      for (int j = 0; j < 4; j++)
+      {
+        if(com.charAt(i) == '+')
+        {
+          Bluetooth_dir[j] = 1;
+        }
+        else 
+        {
+          Bluetooth_dir[j] = -1;
+        }
+        i++;
+      }
+      
+      firstTime = true;
+     }
+     else if(com.charAt(0) == 'A')
+    {
+     BluAuto = false;
+     if(com.charAt(1) == 'A')
+     {
+      BluAuto = true;
+     }
+     else if(com.charAt(1) == 'S')
+     {
+      animate = false;
+     }
+     else if (com.charAt(1) == 'P')
+     {
+      animate = true;
+     }
+     else if (com.charAt(1) == 'W')
+     {
+      copyArray(Bluetooth_dir,RotateCW_dir,4);
+      copyArray(Bluetooth_stand,RotateStand,8);
+      BlueMove_Rotate = true;
+     }
+      else if (com.charAt(1) == 'C')
+     {
+      copyArray(Bluetooth_dir,RotateCCW_dir,4);
+      copyArray(Bluetooth_stand,RotateStand,8);
+      BlueMove_Rotate = true;
+     }
+     else if (com.charAt(1) == 'F')
+     {
+      copyArray(Bluetooth_dir,MoveForward_dir,4);
+      copyArray(Bluetooth_stand,ForwardStand,8);
+      BlueMove_Rotate = false;
+     }
+     else if (com.charAt(1) == 'B')
+     {
+      copyArray(Bluetooth_dir,MoveBackward_dir,4);
+      copyArray(Bluetooth_stand,ForwardStand,8);
+      BlueMove_Rotate = false;
+     }
+     else if (com.charAt(1) == 'L')
+     {
+      copyArray(Bluetooth_dir,MoveLeft_dir,4);
+      copyArray(Bluetooth_stand,SideWaysStand,8);
+      BlueMove_Rotate = false;
+     }
+     else if (com.charAt(1) == 'R')
+     {
+      copyArray(Bluetooth_dir,MoveRight_dir,4);
+      copyArray(Bluetooth_stand,SideWaysStand,8);
+      BlueMove_Rotate = false;
+     }
+
+      if(com.charAt(1) != 'S' && com.charAt(1) != 'P')
+      {
+        firstTime = true;
+      }
+     }
+  }
+  
+}
+
+void copyArray(int *to, int from[], int Asize) {
+
+    for(int i=0; i<Asize; i++){
+      *(to+i)=from[i];
+    }
+}
